@@ -1,0 +1,231 @@
+from typing import Dict, List, Tuple, Optional
+import numpy as np
+
+from config_loader import load_config
+from powertrain import (
+    TechnologySpec,
+    PowertrainBase,
+    ConventionalPowertrain,
+    ParallelHybridPowertrain,
+    SerialHybridPowertrain,
+    FullyElectricPowertrain,
+)
+from mission import MissionSegment, simulate_mission
+from constraints import perform_constraint_analysis
+
+config = load_config()
+
+class HybridElectricAircraft:
+    """
+    Complete hybrid-electric aircraft sizing with validated methodology.
+    """
+
+    def __init__(self, name: str = "eSTOL-19"):
+        self.name = name
+        # ===== REQUIREMENTS =====
+        self.W_payload_lb = config.get('mission_requirements', 'payload_weight_lb')
+        self.range_nm = config.get('mission_requirements', 'design_range_nm')
+        self.cruise_speed_kts = config.get('mission_requirements', 'cruise_speed_kts')
+        self.cruise_alt_ft = config.get('mission_requirements', 'cruise_altitude_ft')
+        # ===== AERODYNAMICS =====
+        self.AR = config.get('aerodynamics', 'aspect_ratio')
+        self.e = config.get('aerodynamics', 'oswald_efficiency')
+        self.CD0 = config.get('aerodynamics', 'zero_lift_drag_coefficient')
+        self.K1 = 1 / (np.pi * self.AR * self.e)
+        self.CLmax_clean = config.get('aerodynamics', 'CLmax_clean')
+        self.CLmax_TO = config.get('aerodynamics', 'CLmax_takeoff')
+        self.CLmax_land = config.get('aerodynamics', 'CLmax_landing')
+        # ===== PERFORMANCE =====
+        self.V_stall_kts = config.get('performance_requirements', 'stall_speed_requirement_kts')
+        self.BFL_ft = config.get('performance_requirements', 'balanced_field_length_ft')
+        self.LFL_ft = config.get('performance_requirements', 'landing_field_length_ft')
+        self.ROC_fpm = config.get('performance_requirements', 'rate_of_climb_sea_level_fpm')
+        # ===== TECHNOLOGY =====
+        self.tech = TechnologySpec.from_config(config)
+        # ===== DESIGN VARIABLES =====
+        self.TOGW_lb = config.get('weight_iteration', 'initial_TOGW_guess_lb')
+        self.OEW_lb = 0.0
+        self.W_fuel_lb = 0.0
+        self.W_battery_lb = 0.0
+        self.S_wing_ft2 = 0.0
+        self.WS_psf = 0.0
+        self.PW_hp_lb = 0.0
+        self.weight_breakdown: Dict[str, float] = {}
+        # Powertrain
+        self.powertrain: Optional[PowertrainBase] = None
+        self.Hp_design = 0.0
+
+    def set_powertrain(self, architecture: str, Hp_design: float = 0.0):
+        arch_map = {
+            'conventional': ConventionalPowertrain,
+            'parallel': ParallelHybridPowertrain,
+            'serial': SerialHybridPowertrain,
+            'electric': FullyElectricPowertrain,
+        }
+        if architecture.lower() not in arch_map:
+            raise ValueError(f"Unknown architecture: {architecture}")
+        self.powertrain = arch_map[architecture.lower()](self.tech)
+        self.Hp_design = Hp_design
+        print(f"✓ Powertrain set: {self.powertrain.name} (Hp = {Hp_design:.2f})")
+
+    def create_mission(self, hybridization_profile: Dict[str, float]) -> List[MissionSegment]:
+        segments = [
+            MissionSegment('takeoff', 0, 35, hybridization_profile.get('takeoff', 0.0)),
+            MissionSegment('climb', 35, self.cruise_alt_ft, hybridization_profile.get('climb', 0.0)),
+            MissionSegment('cruise', self.cruise_alt_ft, self.cruise_alt_ft,
+                           hybridization_profile.get('cruise', 0.0)),
+            MissionSegment('descent', self.cruise_alt_ft, 450, hybridization_profile.get('descent', 0.0)),
+            MissionSegment('loiter', 450, 450, hybridization_profile.get('loiter', 0.0)),
+            MissionSegment('landing', 450, 0, hybridization_profile.get('landing', 0.0)),
+        ]
+        return segments
+
+    def simulate_mission(self, segments: List[MissionSegment], TOGW_lb: float,
+                         S_wing_ft2: float) -> Dict:
+        return simulate_mission(self, segments, TOGW_lb, S_wing_ft2)
+
+    def constraint_analysis(self, TOGW_lb: float) -> Tuple[float, float]:
+        return perform_constraint_analysis(
+            TOGW_lb=TOGW_lb,
+            V_stall_kts=self.V_stall_kts,
+            BFL_ft=self.BFL_ft,
+            LFL_ft=self.LFL_ft,
+            CLmax_clean=self.CLmax_clean,
+            CLmax_TO=self.CLmax_TO,
+            CLmax_land=self.CLmax_land,
+            CD0=self.CD0,
+            K1=self.K1,
+            cruise_speed_kts=self.cruise_speed_kts,
+            cruise_alt_ft=self.cruise_alt_ft,
+            prop_efficiency=self.tech.prop_efficiency,
+            config=config,
+        )
+
+    def calculate_OEW(self, TOGW_lb: float, S_wing_ft2: float) -> float:
+        N_ult = 3.75
+        W_wing_lb = 0.04674 * (TOGW_lb**0.397) * (S_wing_ft2**0.360) * (N_ult**0.397) * (self.AR**1.712)
+        W_fuselage_lb = 0.23 * TOGW_lb**0.5 * 100
+        W_empennage_lb = 0.04 * TOGW_lb
+        W_gear_lb = 0.02 * TOGW_lb
+        W_propulsion_lb = self.powertrain.get_total_propulsion_weight()
+        W_systems_lb = 0.2 * TOGW_lb
+
+        breakdown = {
+            'wing': W_wing_lb,
+            'fuselage': W_fuselage_lb,
+            'empennage': W_empennage_lb,
+            'gear': W_gear_lb,
+            'propulsion': W_propulsion_lb,
+            'systems': W_systems_lb,
+        }
+        self.weight_breakdown = breakdown
+        OEW_lb = sum(breakdown.values())
+        return OEW_lb
+
+    def size_aircraft(self, max_iterations: int = 100, tolerance: float = 0.01,
+                      hybridization_profile: Optional[Dict] = None) -> Dict:
+        if self.powertrain is None:
+            raise ValueError("Must set powertrain before sizing")
+
+        if hybridization_profile is None:
+            hybridization_profile = {
+                'takeoff': self.Hp_design,
+                'climb': self.Hp_design,
+                'cruise': self.Hp_design,
+                'descent': 0.0,
+                'loiter': 0.0,
+                'landing': self.Hp_design,
+            }
+
+        print(f"\n{'='*70}")
+        print(f"SIZING: {self.name} - {self.powertrain.name}")
+        print(f"{'='*70}")
+        print(f"Payload:    {self.W_payload_lb:.0f} lb")
+        print(f"Range:      {self.range_nm:.0f} nm")
+        print(f"Cruise:     {self.cruise_speed_kts:.0f} kts at {self.cruise_alt_ft:.0f} ft")
+
+        TOGW_guess_lb = 15000
+
+        for iteration in range(max_iterations):
+            WS_psf, P_shaft_kW = self.constraint_analysis(TOGW_guess_lb)
+            S_wing_ft2 = TOGW_guess_lb / WS_psf
+
+            self.powertrain.size_components(P_shaft_kW, self.Hp_design)
+
+            OEW_lb = self.calculate_OEW(TOGW_guess_lb, S_wing_ft2)
+            segments = self.create_mission(hybridization_profile)
+            mission_results = self.simulate_mission(segments, TOGW_guess_lb, S_wing_ft2)
+
+            W_fuel_lb = mission_results['total_fuel_lb'] * 1.06
+            W_battery_Wh = mission_results['total_battery_Wh'] / self.tech.battery_DOD
+            W_battery_lb = (W_battery_Wh / self.tech.battery_specific_energy_Wh_kg) * 2.20462
+
+            TOGW_new_lb = OEW_lb + self.W_payload_lb + W_fuel_lb + W_battery_lb
+            error = abs(TOGW_new_lb - TOGW_guess_lb) / TOGW_guess_lb
+
+            print(f"  Iter {iteration+1:2d}: TOGW = {TOGW_new_lb:7.0f} lb, "
+                  f"OEW = {OEW_lb:7.0f} lb, Fuel = {W_fuel_lb:6.0f} lb, "
+                  f"Battery = {W_battery_lb:6.0f} lb, Error = {error:.4f}")
+
+            if error < tolerance:
+                print(f"  ✓ Converged in {iteration+1} iterations!")
+                break
+
+            TOGW_guess_lb = 0.7 * TOGW_guess_lb + 0.3 * TOGW_new_lb
+        else:
+            print(f"  ⚠ Did not converge in {max_iterations} iterations")
+
+        self.TOGW_lb = TOGW_new_lb
+        self.OEW_lb = OEW_lb
+        self.W_fuel_lb = W_fuel_lb
+        self.W_battery_lb = W_battery_lb
+        self.S_wing_ft2 = S_wing_ft2
+        self.WS_psf = TOGW_new_lb / S_wing_ft2
+
+        fuel_fraction = W_fuel_lb / TOGW_new_lb
+        battery_fraction = W_battery_lb / TOGW_new_lb
+        payload_fraction = self.W_payload_lb / TOGW_new_lb
+
+        E_fuel_Wh = W_fuel_lb * 0.453592 * 43000 / 3.6
+        E_battery_Wh = W_battery_Wh
+        E_total_Wh = E_fuel_Wh + E_battery_Wh
+        PREE = (self.W_payload_lb * 4.44822) * (self.range_nm * 1852) / E_total_Wh
+
+        results = {
+            'TOGW_lb': TOGW_new_lb,
+            'OEW_lb': OEW_lb,
+            'W_fuel_lb': W_fuel_lb,
+            'W_battery_lb': W_battery_lb,
+            'W_payload_lb': self.W_payload_lb,
+            'S_wing_ft2': S_wing_ft2,
+            'WS_psf': self.WS_psf,
+            'fuel_fraction': fuel_fraction,
+            'battery_fraction': battery_fraction,
+            'payload_fraction': payload_fraction,
+            'PREE': PREE,
+            'mission_time_min': mission_results['total_time_sec'] / 60,
+            'converged': error < tolerance,
+        }
+
+        print(f"\n{'='*70}")
+        print(f"FINAL SIZING RESULTS")
+        print(f"{'='*70}")
+        print(f"TOGW:           {TOGW_new_lb:8.0f} lb")
+        print(f"OEW:            {OEW_lb:8.0f} lb ({OEW_lb/TOGW_new_lb*100:.1f}%)")
+        print(f"Payload:        {self.W_payload_lb:8.0f} lb ({payload_fraction*100:.1f}%)")
+        print(f"Fuel:           {W_fuel_lb:8.0f} lb ({fuel_fraction*100:.1f}%)")
+        print(f"Battery:        {W_battery_lb:8.0f} lb ({battery_fraction*100:.1f}%)")
+        print(f"")
+        print(f"Wing Area:      {S_wing_ft2:8.1f} ft²")
+        print(f"Wing Loading:   {self.WS_psf:8.1f} lb/ft²")
+        print(f"")
+        print(f"GT Power:       {self.powertrain.P_GT_kW:8.1f} kW ({self.powertrain.m_GT_lb:.0f} lb)")
+        print(f"EM Power:       {self.powertrain.P_EM_kW:8.1f} kW ({self.powertrain.m_EM_lb:.0f} lb)")
+        if self.powertrain.P_GEN_kW > 0:
+            print(f"GEN Power:      {self.powertrain.P_GEN_kW:8.1f} kW ({self.powertrain.m_GEN_lb:.0f} lb)")
+        print(f"")
+        print(f"PREE:           {PREE:8.3f}")
+        print(f"Mission Time:   {results['mission_time_min']:8.1f} min")
+        print(f"{'='*70}\n")
+
+        return results
