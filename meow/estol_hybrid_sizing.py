@@ -40,7 +40,9 @@ from mission import (
     simulate_cruise_segment,
     simulate_climb_segment,
     simulate_descent_segment,
-    simulate_simple_segment,
+    simulate_takeoff_segment,
+    simulate_loiter_segment,
+    simulate_landing_segment,
 )
 from constraints import perform_constraint_analysis
 from aircraft import HybridElectricAircraft  # import aircraft class
