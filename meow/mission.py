@@ -108,17 +108,168 @@ def simulate_climb_segment(self, segment: MissionSegment, W_lb: float, S_ft2: fl
     return time_sec, fuel_lb, battery_Wh
 
 def simulate_descent_segment(self, segment: MissionSegment, W_lb: float, S_ft2: float) -> Tuple:
-    """Descent segment - minimal power"""
-    time_sec = 480  # 8 minutes typical descent
-    fuel_lb = 0.02 * W_lb  # 2% weight as fuel
-    battery_Wh = 100  # Minimal battery use
+    """Descent segment - physics-based calculation with idle power"""
+    # Atmospheric conditions at average altitude
+    h_avg_ft = (segment.altitude_start_ft + segment.altitude_end_ft) / 2
+    h_avg_m = h_avg_ft * 0.3048
+    _, _, rho_kg_m3, _ = atmosisa(h_avg_m)
+    rho_slug_ft3 = rho_kg_m3 / 515.379
+
+    # Descent speed (slightly below cruise speed for passenger comfort)
+    V_descent_kts = self.cruise_speed_kts * 0.9
+    V_fps = V_descent_kts * 1.688
+
+    # Descent rate (typical: 500-800 fpm for comfort)
+    descent_rate_fpm = 600
+    descent_rate_fps = descent_rate_fpm / 60
+
+    # Flight path angle
+    gamma = np.arctan(descent_rate_fps / V_fps)
+
+    # Lift coefficient (slightly less than weight, due to descent)
+    W_effective = W_lb * np.cos(gamma)
+    CL = W_effective / (0.5 * rho_slug_ft3 * V_fps**2 * S_ft2)
+    CD = self.CD0 + self.K1 * CL**2
+
+    # Drag force
+    D_lb = 0.5 * rho_slug_ft3 * V_fps**2 * S_ft2 * CD
+
+    # Thrust required (reduced due to descent - gravity assists)
+    T_required_lb = D_lb - W_lb * np.sin(gamma)
+
+    # If negative thrust (descending too fast), use flight idle power
+    if T_required_lb < 0:
+        # Flight idle: ~7% of rated power
+        P_shaft_kW = self.powertrain.P_GT_kW * 0.07
+    else:
+        # Power required
+        P_shaft_HP = T_required_lb * V_fps / (550 * self.tech.prop_efficiency)
+        P_shaft_kW = P_shaft_HP * 0.7457
+        # Minimum flight idle power
+        P_shaft_kW = max(P_shaft_kW, self.powertrain.P_GT_kW * 0.07)
+
+    # Power split
+    power_split = self.powertrain.get_power_split(P_shaft_kW, segment.Hp)
+
+    # Descent time
+    alt_change_ft = segment.altitude_start_ft - segment.altitude_end_ft
+    time_sec = (alt_change_ft / descent_rate_fps) if descent_rate_fps > 0 else 480
+
+    # Consumption
+    fuel_lb = power_split['fuel_rate_kg_s'] * time_sec * 2.20462
+    battery_Wh = (power_split['battery_power_W'] * time_sec) / 3600
+
     return time_sec, fuel_lb, battery_Wh
 
-def simulate_simple_segment(self, segment: MissionSegment, W_lb: float, S_ft2: float) -> Tuple:
-    """Simple simulation for other segments"""
-    time_sec = 180  # 3 minutes
-    fuel_lb = 0.01 * W_lb
-    battery_Wh = 200
+def simulate_takeoff_segment(self, segment: MissionSegment, W_lb: float, S_ft2: float) -> Tuple:
+    """Takeoff segment - ground roll + rotation + climb to 35 ft"""
+    # Sea level conditions
+    rho_sl = 0.002377  # slug/ft³
+
+    # Takeoff speed (1.1 * stall speed with flaps)
+    V_stall_TO_fps = np.sqrt(2 * W_lb / (rho_sl * S_ft2 * self.CLmax_TO))
+    V_liftoff_fps = 1.1 * V_stall_TO_fps
+
+    # Ground roll time (assume constant acceleration to simplify)
+    # Average thrust during ground roll ~ 80% of static thrust
+    # Using simplified kinematic equation: t = 2*distance / V_avg
+    t_ground_sec = 30  # Typical: 20-40 seconds for regional aircraft
+
+    # Climb to 35 ft at V_y (best rate of climb speed ~ 1.3 * V_stall)
+    V_climb_fps = 1.3 * V_stall_TO_fps
+    climb_gradient = 0.08  # 8% gradient typical for takeoff
+    ROC_fps = V_climb_fps * climb_gradient
+    t_climb_sec = 35 / ROC_fps if ROC_fps > 0 else 20
+
+    # Total time
+    time_sec = t_ground_sec + t_climb_sec
+
+    # Takeoff power (max continuous power, typically 95-100% rated)
+    P_takeoff_kW = self.powertrain.P_GT_kW * 0.95
+    if hasattr(self.powertrain, 'P_EM_kW') and self.powertrain.P_EM_kW > 0:
+        # Hybrid: can add electric power
+        P_takeoff_kW = self.powertrain.P_GT_kW + self.powertrain.P_EM_kW
+
+    # Power split
+    power_split = self.powertrain.get_power_split(P_takeoff_kW, segment.Hp)
+
+    # Consumption (higher BSFC at full power, but short duration)
+    fuel_lb = power_split['fuel_rate_kg_s'] * time_sec * 2.20462
+    battery_Wh = (power_split['battery_power_W'] * time_sec) / 3600
+
+    return time_sec, fuel_lb, battery_Wh
+
+def simulate_loiter_segment(self, segment: MissionSegment, W_lb: float, S_ft2: float) -> Tuple:
+    """Loiter segment - level flight at best endurance speed"""
+    # Loiter altitude (pattern altitude, typically 450-1000 ft)
+    h_m = segment.altitude_start_ft * 0.3048
+    _, _, rho_kg_m3, _ = atmosisa(h_m)
+    rho_slug_ft3 = rho_kg_m3 / 515.379
+
+    # Best endurance speed: minimum fuel flow = minimum (P_required)
+    # For propeller aircraft: V_endurance ≈ V_stall * sqrt(3) * (1/sqrt(CD0/K1))
+    # Simplified: fly at ~1.3 * V_stall for good L/D
+    V_stall_fps = np.sqrt(2 * W_lb / (rho_slug_ft3 * S_ft2 * self.CLmax_clean))
+    V_loiter_fps = 1.3 * V_stall_fps
+
+    # Level flight power required
+    CL = W_lb / (0.5 * rho_slug_ft3 * V_loiter_fps**2 * S_ft2)
+    CD = self.CD0 + self.K1 * CL**2
+    D_lb = 0.5 * rho_slug_ft3 * V_loiter_fps**2 * S_ft2 * CD
+
+    P_shaft_HP = D_lb * V_loiter_fps / (550 * self.tech.prop_efficiency)
+    P_shaft_kW = P_shaft_HP * 0.7457
+
+    # Power split
+    power_split = self.powertrain.get_power_split(P_shaft_kW, segment.Hp)
+
+    # Loiter time (typically 30 minutes for reserves - FAA requirement)
+    time_sec = 30 * 60  # 30 minutes
+
+    # Consumption
+    fuel_lb = power_split['fuel_rate_kg_s'] * time_sec * 2.20462
+    battery_Wh = (power_split['battery_power_W'] * time_sec) / 3600
+
+    return time_sec, fuel_lb, battery_Wh
+
+def simulate_landing_segment(self, segment: MissionSegment, W_lb: float, S_ft2: float) -> Tuple:
+    """Landing segment - approach + flare + ground roll"""
+    # Pattern altitude conditions
+    h_m = segment.altitude_start_ft * 0.3048
+    _, _, rho_kg_m3, _ = atmosisa(h_m)
+    rho_slug_ft3 = rho_kg_m3 / 515.379
+
+    # Approach speed (1.3 * stall speed with landing flaps)
+    V_stall_land_fps = np.sqrt(2 * W_lb / (rho_slug_ft3 * S_ft2 * self.CLmax_land))
+    V_approach_fps = 1.3 * V_stall_land_fps
+
+    # Approach phase (450 ft descent at 3° glideslope)
+    gamma_approach = 3.0 * np.pi / 180  # 3° approach
+    descent_distance_ft = segment.altitude_start_ft / np.tan(gamma_approach)
+    t_approach_sec = descent_distance_ft / V_approach_fps
+
+    # Power required for 3° approach (reduced thrust)
+    CL = W_lb / (0.5 * rho_slug_ft3 * V_approach_fps**2 * S_ft2)
+    CD = self.CD0 + self.K1 * CL**2 + 0.02  # Extra drag from landing gear/flaps
+    D_lb = 0.5 * rho_slug_ft3 * V_approach_fps**2 * S_ft2 * CD
+    T_required_lb = D_lb - W_lb * np.sin(gamma_approach)
+
+    P_shaft_HP = max(0, T_required_lb * V_approach_fps / (550 * self.tech.prop_efficiency))
+    P_shaft_kW = P_shaft_HP * 0.7457
+
+    # Flare and ground roll (minimal power, reverse thrust not modeled)
+    t_flare_rollout_sec = 30  # Typical: 20-40 seconds
+
+    # Total time
+    time_sec = t_approach_sec + t_flare_rollout_sec
+
+    # Power split (average power during approach)
+    power_split = self.powertrain.get_power_split(P_shaft_kW, segment.Hp)
+
+    # Consumption
+    fuel_lb = power_split['fuel_rate_kg_s'] * time_sec * 2.20462
+    battery_Wh = (power_split['battery_power_W'] * time_sec) / 3600
+
     return time_sec, fuel_lb, battery_Wh
 
 # ======================= Public API ======================= #
@@ -138,8 +289,15 @@ def simulate_mission(self, segments: List[MissionSegment], TOGW_lb: float,
             t, f, b = simulate_climb_segment(self, segment, W_current_lb, S_wing_ft2)
         elif segment.name == 'descent':
             t, f, b = simulate_descent_segment(self, segment, W_current_lb, S_wing_ft2)
+        elif segment.name == 'takeoff':
+            t, f, b = simulate_takeoff_segment(self, segment, W_current_lb, S_wing_ft2)
+        elif segment.name == 'loiter':
+            t, f, b = simulate_loiter_segment(self, segment, W_current_lb, S_wing_ft2)
+        elif segment.name == 'landing':
+            t, f, b = simulate_landing_segment(self, segment, W_current_lb, S_wing_ft2)
         else:
-            t, f, b = simulate_simple_segment(self, segment, W_current_lb, S_wing_ft2)
+            # Fallback for unknown segment types
+            raise ValueError(f"Unknown segment type: {segment.name}")
 
         # Update weight
         W_current_lb -= f
