@@ -47,7 +47,7 @@
   },
 
   "dep_system": {
-    "enabled": false,
+    "enabled": true,
     "description": "Distributed Electric Propulsion (X-57 inspired)",
     "number_of_highlift_motors": 12,
     "blown_span_fraction": 0.65,

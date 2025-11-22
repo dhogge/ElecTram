@@ -35,6 +35,11 @@ class HybridElectricAircraft:
         self.CLmax_clean = config.get('aerodynamics', 'CLmax_clean')
         self.CLmax_TO = config.get('aerodynamics', 'CLmax_takeoff')
         self.CLmax_land = config.get('aerodynamics', 'CLmax_landing')
+        # ===== DISTRIBUTED ELECTRIC PROPULSION =====
+        self.dep_enabled = config.get('dep_system', 'enabled')
+        self.dep_lift_aug_max = config.get('dep_system', 'lift_augmentation_factor_max')
+        self.dep_blown_span_fraction = config.get('dep_system', 'blown_span_fraction')
+        self.dep_num_motors = config.get('dep_system', 'number_of_highlift_motors')
         # ===== PERFORMANCE =====
         self.V_stall_kts = config.get('performance_requirements', 'stall_speed_requirement_kts')
         self.BFL_ft = config.get('performance_requirements', 'balanced_field_length_ft')
@@ -68,15 +73,75 @@ class HybridElectricAircraft:
         self.Hp_design = Hp_design
         print(f"✓ Powertrain set: {self.powertrain.name} (Hp = {Hp_design:.2f})")
 
-    def create_mission(self, hybridization_profile: Dict[str, float]) -> List[MissionSegment]:
+    def get_lift_augmentation_factor(self, blown_lift_active: bool) -> float:
+        """
+        Calculate effective lift augmentation factor from distributed electric propulsion.
+
+        Based on NASA X-57 research showing ~1.7x lift augmentation from 12 high-lift propellers.
+        The augmentation is scaled by the blown span fraction (portion of wing affected).
+
+        Args:
+            blown_lift_active: Whether the DEP high-lift motors are active (binary on/off)
+
+        Returns:
+            Lift augmentation multiplier to apply to CL and CLmax
+
+        Physics:
+            CL_effective = CL_base × augmentation_factor
+            augmentation_factor = 1 + (lift_aug_max - 1) × blown_span_fraction
+
+        Example:
+            With lift_aug_max = 1.80 (80% increase) and blown_span_fraction = 0.65:
+            augmentation_factor = 1 + (1.80 - 1.0) × 0.65 = 1.52 (52% increase)
+        """
+        if not blown_lift_active or not self.dep_enabled:
+            return 1.0  # No augmentation
+
+        # Calculate effective augmentation scaled by blown span fraction
+        augmentation_factor = 1.0 + (self.dep_lift_aug_max - 1.0) * self.dep_blown_span_fraction
+
+        return augmentation_factor
+
+    def create_mission(self, hybridization_profile: Dict[str, float],
+                      blown_lift_profile: Dict[str, bool] = None) -> List[MissionSegment]:
+        """
+        Create mission profile with segment-specific hybridization and blown lift control
+
+        Args:
+            hybridization_profile: Dict mapping segment names to hybridization ratios (0.0-1.0)
+            blown_lift_profile: Dict mapping segment names to blown lift active status (True/False)
+                               If None, defaults to True for takeoff/landing, False for cruise
+        """
+        if blown_lift_profile is None:
+            # Default: blown lift active for low-speed segments, off for cruise
+            blown_lift_profile = {
+                'takeoff': True,
+                'climb': True,
+                'cruise': False,
+                'descent': False,
+                'loiter': False,
+                'landing': True,
+            }
+
         segments = [
-            MissionSegment('takeoff', 0, 35, hybridization_profile.get('takeoff', 0.0)),
-            MissionSegment('climb', 35, self.cruise_alt_ft, hybridization_profile.get('climb', 0.0)),
+            MissionSegment('takeoff', 0, 35,
+                          hybridization_profile.get('takeoff', 0.0),
+                          blown_lift_profile.get('takeoff', False)),
+            MissionSegment('climb', 35, self.cruise_alt_ft,
+                          hybridization_profile.get('climb', 0.0),
+                          blown_lift_profile.get('climb', False)),
             MissionSegment('cruise', self.cruise_alt_ft, self.cruise_alt_ft,
-                           hybridization_profile.get('cruise', 0.0)),
-            MissionSegment('descent', self.cruise_alt_ft, 450, hybridization_profile.get('descent', 0.0)),
-            MissionSegment('loiter', 450, 450, hybridization_profile.get('loiter', 0.0)),
-            MissionSegment('landing', 450, 0, hybridization_profile.get('landing', 0.0)),
+                          hybridization_profile.get('cruise', 0.0),
+                          blown_lift_profile.get('cruise', False)),
+            MissionSegment('descent', self.cruise_alt_ft, 450,
+                          hybridization_profile.get('descent', 0.0),
+                          blown_lift_profile.get('descent', False)),
+            MissionSegment('loiter', 450, 450,
+                          hybridization_profile.get('loiter', 0.0),
+                          blown_lift_profile.get('loiter', False)),
+            MissionSegment('landing', 450, 0,
+                          hybridization_profile.get('landing', 0.0),
+                          blown_lift_profile.get('landing', False)),
         ]
         return segments
 
