@@ -84,6 +84,14 @@ class DualMotorDEPPowertrain:
         self.m_wiring_lb = 0.0
         self.m_controllers_lb = 0.0
 
+        # Compatibility properties for existing sizing loop
+        self.P_GT_kW = 0.0  # No gas turbine in fully electric
+        self.P_EM_kW = 0.0  # Will be set to cruise motor power
+        self.P_GEN_kW = 0.0  # No generator in fully electric
+        self.m_GT_lb = 0.0
+        self.m_EM_lb = 0.0
+        self.m_GEN_lb = 0.0
+
     def size_cruise_motors(self, P_cruise_kW: float):
         """
         Size the cruise motors based on cruise power requirement
@@ -120,59 +128,61 @@ class DualMotorDEPPowertrain:
         self.m_wiring_lb = total_power_kW * self.config['dep_system']['wiring_and_controls']['wiring_weight_factor']
         self.m_controllers_lb = total_power_kW * self.config['dep_system']['wiring_and_controls']['controller_weight_per_kW']
 
-    def get_power_split(self, P_required_kW: float, flight_phase: str) -> Dict:
+        # Update compatibility properties
+        self.P_EM_kW = self.cruise_motors.total_power_kW
+        self.m_EM_lb = self.m_cruise_motors_lb
+
+    def size_components(self, P_shaft_kW: float, Hp: float):
         """
-        Calculate power distribution between motor sets for given flight phase
+        Compatibility method for existing sizing loop interface.
 
         Args:
-            P_required_kW: Total shaft power required
-            flight_phase: Current flight phase ('takeoff', 'cruise', etc.)
+            P_shaft_kW: Cruise power requirement from constraint analysis
+            Hp: Hybridization ratio (not used for dual motor DEP)
+        """
+        # Size cruise motors for cruise power
+        self.size_cruise_motors(P_shaft_kW)
+
+    def get_power_split(self, P_required_kW: float, Hp: float) -> Dict:
+        """
+        Calculate power distribution for dual motor DEP system.
+
+        NOTE: This method returns power split for CRUISE MOTORS ONLY.
+        High-lift motor power is added separately in mission.py based on
+        blown_lift_active flag.
+
+        Args:
+            P_required_kW: Shaft power required (from propulsion simulation)
+            Hp: Hybridization ratio (ignored for fully electric dual motor DEP)
 
         Returns:
-            Dict with power breakdown and energy consumption
+            Dict with power breakdown for cruise motors and battery
         """
-        # Determine which motor sets are active
-        highlift_active = self.highlift_motors.is_active(flight_phase)
-        cruise_active = self.cruise_motors.is_active(flight_phase) if self.cruise_motors else False
+        if self.cruise_motors is None:
+            # Motors not sized yet
+            return {
+                'P_GT_kW': 0.0,
+                'P_EM_kW': 0.0,
+                'fuel_rate_kg_s': 0.0,
+                'battery_power_W': 0.0,
+            }
 
-        # Power from each motor set
-        if highlift_active and cruise_active:
-            # Both active (takeoff, climb, landing)
-            P_highlift = self.highlift_motors.total_power_kW
-            P_cruise = P_required_kW  # Cruise motors provide main thrust
-            P_total = P_highlift + P_cruise
-        elif cruise_active:
-            # Only cruise active (cruise, descent, loiter)
-            P_highlift = 0.0
-            P_cruise = P_required_kW
-            P_total = P_cruise
-        else:
-            # Error case
-            P_highlift = 0.0
-            P_cruise = 0.0
-            P_total = 0.0
+        # Cruise motors provide all shaft power
+        # (High-lift motors handled separately in mission.py)
+        P_cruise_shaft_kW = P_required_kW
 
         # Electrical power required (accounting for motor efficiency)
-        hl_efficiency = self.highlift_motors.efficiency if highlift_active else 1.0
-        cr_efficiency = self.cruise_motors.efficiency if cruise_active and self.cruise_motors else 1.0
-
-        P_elec_highlift = P_highlift / hl_efficiency if highlift_active else 0.0
-        P_elec_cruise = P_cruise / cr_efficiency if cruise_active else 0.0
-        P_elec_total = P_elec_highlift + P_elec_cruise
+        cr_efficiency = self.cruise_motors.efficiency
+        P_elec_cruise_kW = P_cruise_shaft_kW / cr_efficiency
 
         # Battery power draw (in Watts for consistency with mission sim)
-        battery_power_W = P_elec_total * 1000.0
+        battery_power_W = P_elec_cruise_kW * 1000.0
 
         return {
-            'phase': flight_phase,
-            'highlift_active': highlift_active,
-            'cruise_active': cruise_active,
-            'P_highlift_shaft_kW': P_highlift,
-            'P_cruise_shaft_kW': P_cruise,
-            'P_total_shaft_kW': P_total,
-            'P_battery_kW': P_elec_total,
-            'battery_power_W': battery_power_W,
+            'P_GT_kW': 0.0,  # No gas turbine in fully electric
+            'P_EM_kW': P_cruise_shaft_kW,  # Cruise motor power
             'fuel_rate_kg_s': 0.0,  # Fully electric, no fuel
+            'battery_power_W': battery_power_W,  # Battery draw for cruise motors
         }
 
     def size_battery(self, mission_energy_Wh: float):

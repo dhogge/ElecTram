@@ -10,6 +10,7 @@ from powertrain import (
     SerialHybridPowertrain,
     FullyElectricPowertrain,
 )
+from dual_motor_powertrain import DualMotorDEPPowertrain
 from mission import MissionSegment, simulate_mission
 from constraints import perform_constraint_analysis
 
@@ -67,10 +68,17 @@ class HybridElectricAircraft:
             'parallel': ParallelHybridPowertrain,
             'serial': SerialHybridPowertrain,
             'electric': FullyElectricPowertrain,
+            'dual_motor_dep': DualMotorDEPPowertrain,
         }
         if architecture.lower() not in arch_map:
             raise ValueError(f"Unknown architecture: {architecture}")
-        self.powertrain = arch_map[architecture.lower()](self.tech)
+
+        # For dual motor DEP, pass config dict to constructor
+        if architecture.lower() == 'dual_motor_dep':
+            self.powertrain = DualMotorDEPPowertrain(self.tech, config.config)
+        else:
+            self.powertrain = arch_map[architecture.lower()](self.tech)
+
         self.Hp_design = Hp_design
         print(f"✓ Powertrain set: {self.powertrain.name} (Hp = {Hp_design:.2f})")
 
@@ -203,10 +211,13 @@ class HybridElectricAircraft:
             raise ValueError("Must set powertrain before sizing")
 
         if hybridization_profile is None:
+            # Default hybridization profile optimized for power-assist hybrid
+            # Cruise Hp = 0.0 for optimal efficiency (all fuel, no battery draw)
+            # High-power phases use Hp_design for battery assist
             hybridization_profile = {
                 'takeoff': self.Hp_design,
                 'climb': self.Hp_design,
-                'cruise': self.Hp_design,
+                'cruise': 0.0,  # CRITICAL: Cruise on fuel only for optimal efficiency
                 'descent': 0.0,
                 'loiter': 0.0,
                 'landing': self.Hp_design,

@@ -2,6 +2,10 @@ from dataclasses import dataclass
 from atmosphere import atmosisa
 from typing import List, Dict, Tuple
 import numpy as np
+from config_loader import load_config
+
+# Load configuration
+config = load_config()
 
 # need to add rest of mission functions from aircraft.py to here
 
@@ -19,6 +23,26 @@ class MissionSegment:
     fuel_lb: float = 0.0
     battery_Wh: float = 0.0
     distance_nm: float = 0.0
+
+
+def get_highlift_motor_power(self, blown_lift_active: bool) -> float:
+    """
+    Calculate high-lift motor power consumption for DEP system.
+
+    Args:
+        blown_lift_active: Whether the DEP high-lift motors are active
+
+    Returns:
+        Power draw in kW (0 if motors not active or DEP disabled)
+    """
+    if not blown_lift_active or not self.dep_enabled:
+        return 0.0
+
+    # Total high-lift motor power = num_motors × power_per_motor
+    # From config: 12 motors × 10.5 kW = 126 kW
+    P_highlift_kW = self.dep_num_motors * config.get('dep_system', 'motor_power_kW')
+
+    return P_highlift_kW
 
 
 def create_mission(self, hybridization_profile: Dict[str, float],
@@ -97,9 +121,13 @@ def simulate_cruise_segment(self, segment: MissionSegment, W_lb: float, S_ft2: f
     distance_ft = self.range_nm * 6076.12
     time_sec = distance_ft / V_fps
 
-    # Consumption
+    # Add high-lift motor power if active (draws from battery)
+    P_highlift_kW = get_highlift_motor_power(self, segment.blown_lift_active)
+    P_highlift_W = P_highlift_kW * 1000.0
+
+    # Consumption (add high-lift motor energy to battery draw)
     fuel_lb = power_split['fuel_rate_kg_s'] * time_sec * 2.20462
-    battery_Wh = (power_split['battery_power_W'] * time_sec) / 3600
+    battery_Wh = (power_split['battery_power_W'] * time_sec) / 3600 + (P_highlift_W * time_sec) / 3600
 
     segment.distance_nm = self.range_nm
 
@@ -141,9 +169,13 @@ def simulate_climb_segment(self, segment: MissionSegment, W_lb: float, S_ft2: fl
     alt_change_ft = segment.altitude_end_ft - segment.altitude_start_ft
     time_sec = alt_change_ft / ROC_fps if ROC_fps > 0 else 600
 
-    # Consumption
+    # Add high-lift motor power if active (draws from battery)
+    P_highlift_kW = get_highlift_motor_power(self, segment.blown_lift_active)
+    P_highlift_W = P_highlift_kW * 1000.0
+
+    # Consumption (add high-lift motor energy to battery draw)
     fuel_lb = power_split['fuel_rate_kg_s'] * time_sec * 2.20462
-    battery_Wh = (power_split['battery_power_W'] * time_sec) / 3600
+    battery_Wh = (power_split['battery_power_W'] * time_sec) / 3600 + (P_highlift_W * time_sec) / 3600
 
     return time_sec, fuel_lb, battery_Wh
 
@@ -200,9 +232,13 @@ def simulate_descent_segment(self, segment: MissionSegment, W_lb: float, S_ft2: 
     alt_change_ft = segment.altitude_start_ft - segment.altitude_end_ft
     time_sec = (alt_change_ft / descent_rate_fps) if descent_rate_fps > 0 else 480
 
-    # Consumption
+    # Add high-lift motor power if active (draws from battery)
+    P_highlift_kW = get_highlift_motor_power(self, segment.blown_lift_active)
+    P_highlift_W = P_highlift_kW * 1000.0
+
+    # Consumption (add high-lift motor energy to battery draw)
     fuel_lb = power_split['fuel_rate_kg_s'] * time_sec * 2.20462
-    battery_Wh = (power_split['battery_power_W'] * time_sec) / 3600
+    battery_Wh = (power_split['battery_power_W'] * time_sec) / 3600 + (P_highlift_W * time_sec) / 3600
 
     return time_sec, fuel_lb, battery_Wh
 
@@ -242,9 +278,13 @@ def simulate_takeoff_segment(self, segment: MissionSegment, W_lb: float, S_ft2: 
     # Power split
     power_split = self.powertrain.get_power_split(P_takeoff_kW, segment.Hp)
 
-    # Consumption (higher BSFC at full power, but short duration)
+    # Add high-lift motor power if active (draws from battery)
+    P_highlift_kW = get_highlift_motor_power(self, segment.blown_lift_active)
+    P_highlift_W = P_highlift_kW * 1000.0
+
+    # Consumption (add high-lift motor energy to battery draw)
     fuel_lb = power_split['fuel_rate_kg_s'] * time_sec * 2.20462
-    battery_Wh = (power_split['battery_power_W'] * time_sec) / 3600
+    battery_Wh = (power_split['battery_power_W'] * time_sec) / 3600 + (P_highlift_W * time_sec) / 3600
 
     return time_sec, fuel_lb, battery_Wh
 
@@ -281,9 +321,13 @@ def simulate_loiter_segment(self, segment: MissionSegment, W_lb: float, S_ft2: f
     # Loiter time (typically 30 minutes for reserves - FAA requirement)
     time_sec = 30 * 60  # 30 minutes
 
-    # Consumption
+    # Add high-lift motor power if active (draws from battery)
+    P_highlift_kW = get_highlift_motor_power(self, segment.blown_lift_active)
+    P_highlift_W = P_highlift_kW * 1000.0
+
+    # Consumption (add high-lift motor energy to battery draw)
     fuel_lb = power_split['fuel_rate_kg_s'] * time_sec * 2.20462
-    battery_Wh = (power_split['battery_power_W'] * time_sec) / 3600
+    battery_Wh = (power_split['battery_power_W'] * time_sec) / 3600 + (P_highlift_W * time_sec) / 3600
 
     return time_sec, fuel_lb, battery_Wh
 
@@ -327,9 +371,13 @@ def simulate_landing_segment(self, segment: MissionSegment, W_lb: float, S_ft2: 
     # Power split (average power during approach)
     power_split = self.powertrain.get_power_split(P_shaft_kW, segment.Hp)
 
-    # Consumption
+    # Add high-lift motor power if active (draws from battery)
+    P_highlift_kW = get_highlift_motor_power(self, segment.blown_lift_active)
+    P_highlift_W = P_highlift_kW * 1000.0
+
+    # Consumption (add high-lift motor energy to battery draw)
     fuel_lb = power_split['fuel_rate_kg_s'] * time_sec * 2.20462
-    battery_Wh = (power_split['battery_power_W'] * time_sec) / 3600
+    battery_Wh = (power_split['battery_power_W'] * time_sec) / 3600 + (P_highlift_W * time_sec) / 3600
 
     return time_sec, fuel_lb, battery_Wh
 

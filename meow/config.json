@@ -45,6 +45,7 @@
   "dep_system": {
     "enabled": true,
     "description": "Distributed Electric Propulsion (X-57 inspired)",
+    "architecture": "dual_motor",
     "number_of_highlift_motors": 12,
     "blown_span_fraction": 0.65,
     "motor_power_kW": 10.5,
@@ -54,7 +55,54 @@
     "wing_structure_factor": 1.0,
     "lift_augmentation_factor_max": 1.8,
     "use_for_wing_sizing": true,
-    "wing_sizing_description": "When true, wing area is sized assuming blown lift is available for takeoff/landing, resulting in smaller cruise-optimized wing"
+    "wing_sizing_description": "When true, wing area is sized assuming blown lift is available for takeoff/landing, resulting in smaller cruise-optimized wing",
+    "highlift_motors": {
+      "number_of_motors": 12,
+      "location": "inboard_wing",
+      "power_per_motor_kW": 10.5,
+      "propeller_diameter_ft": 1.9,
+      "weight_per_motor_lb": 2.2,
+      "specific_power_kW_kg": 5.0,
+      "efficiency": 0.95,
+      "blown_span_fraction": 0.65,
+      "lift_augmentation_factor_max": 1.80,
+      "use_for_wing_sizing": true,
+      "active_phases": ["takeoff", "climb", "landing"],
+      "folding": {
+        "can_fold": true,
+        "folded_drag_coefficient_increment": 0.001,
+        "fold_time_seconds": 10
+      }
+    },
+    "cruise_motors": {
+      "number_of_motors": 2,
+      "location": "wingtip",
+      "sizing_method": "from_cruise_requirement",
+      "propeller_diameter_ft": 7.5,
+      "weight_per_motor_lb": "calculated",
+      "specific_power_kW_kg": 5.0,
+      "efficiency": 0.95,
+      "propeller_efficiency": 0.85,
+      "active_phases": ["all"],
+      "wingtip_benefits": {
+        "induced_drag_reduction": 0.05,
+        "description": "Wingtip propellers recover vortex energy"
+      }
+    },
+    "power_architecture": {
+      "type": "fully_electric",
+      "options": ["fully_electric", "serial_hybrid", "parallel_hybrid"],
+      "description": {
+        "fully_electric": "Battery → Both motor sets",
+        "serial_hybrid": "GT → Gen → Battery → Both motor sets",
+        "parallel_hybrid": "GT → Cruise only, Battery → High-lift only"
+      }
+    },
+    "wiring_and_controls": {
+      "wiring_weight_factor": 0.15,
+      "controller_weight_per_kW": 0.1,
+      "cooling_weight_factor": 0.05
+    }
   },
   "mission_requirements": {
     "design_range_nm": 400,
