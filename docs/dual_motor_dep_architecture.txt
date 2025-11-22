@@ -1,0 +1,215 @@
+"""
+Dual Motor DEP System Architecture Design Document
+
+This document explains how to model NASA X-57 Maxwell style distributed electric
+propulsion with separate high-lift and cruise motor sets.
+
+============================================================================
+ARCHITECTURE OVERVIEW
+============================================================================
+
+Configuration: Dual Motor Distributed Electric Propulsion (DEP)
+
+Motor Set 1: HIGH-LIFT MOTORS (Inboard Wing)
+├── Quantity: 12 motors
+├── Location: Inboard wing (65% span coverage)
+├── Purpose: Blown lift augmentation
+├── Active During: Takeoff, Climb, Landing
+├── Inactive During: Cruise (folded to minimize drag)
+├── Power per motor: ~10 kW
+├── Total power: ~126 kW
+└── Effect: 52% lift coefficient increase
+
+Motor Set 2: CRUISE MOTORS (Wingtip/Outboard)
+├── Quantity: 2 motors
+├── Location: Wingtips or outboard wing
+├── Purpose: Primary propulsion
+├── Active During: ALL flight phases
+├── Power per motor: Variable (sized by mission)
+├── Total power: Sized for cruise requirement
+├── Effect: Efficient cruise propulsion
+└── Benefits: Wingtip vortex energy recovery (if at tips)
+
+============================================================================
+POWER MANAGEMENT STRATEGY
+============================================================================
+
+Flight Phase Power Distribution:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Phase       │ High-Lift Motors │ Cruise Motors │ Total Power
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Takeoff     │ 100% (126 kW)    │ 100%          │ P_cruise + 126 kW
+Climb       │ 100% (126 kW)    │ 100%          │ P_cruise + 126 kW
+Cruise      │ 0% (folded)      │ 100%          │ P_cruise only
+Descent     │ 0% (folded)      │ Idle          │ Minimal
+Loiter      │ 0% (folded)      │ ~70%          │ P_loiter
+Landing     │ 100% (126 kW)    │ ~30%          │ P_approach + 126 kW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+============================================================================
+BENEFITS OF DUAL MOTOR ARCHITECTURE
+============================================================================
+
+1. WING SIZE REDUCTION (50-60%)
+   - High-lift motors enable smaller wing via blown lift
+   - Cruise motors sized for optimal cruise efficiency
+   - Result: Minimum wing area for best L/D in cruise
+
+2. ENERGY EFFICIENCY
+   - Cruise motors optimized for cruise speed/altitude
+   - No drag penalty from high-lift motors (folded)
+   - Wingtip mounting reduces induced drag
+
+3. FIELD PERFORMANCE
+   - High-lift motors provide short takeoff/landing
+   - Can operate from constrained airfields
+   - Steep approach capability
+
+4. POWER OPTIMIZATION
+   - Each motor set optimized for its mission
+   - High-lift: High thrust, low duration
+   - Cruise: Moderate thrust, high efficiency, long duration
+
+5. REDUNDANCY
+   - Can continue flight if high-lift motors fail (at higher speeds)
+   - Dual cruise motors provide safety
+
+============================================================================
+IMPLEMENTATION APPROACH
+============================================================================
+
+Option 1: FULLY ELECTRIC (Battery Only)
+┌────────────────────────────────────────┐
+│ Battery Pack                           │
+│  ↓                                     │
+│  ├─→ Cruise Motor Controller (2×)     │
+│  │   └─→ Cruise Motors (2×)           │
+│  │                                     │
+│  └─→ High-Lift Controller (12×)       │
+│      └─→ High-Lift Motors (12×)       │
+└────────────────────────────────────────┘
+
+Pros: Simple, lightweight, no emissions
+Cons: Range limited, battery weight
+
+Option 2: SERIAL HYBRID (GT → Battery → Motors)
+┌────────────────────────────────────────┐
+│ Gas Turbine                            │
+│  ↓                                     │
+│ Generator                              │
+│  ↓                                     │
+│ DC Bus ←→ Battery Pack                │
+│  ↓                                     │
+│  ├─→ Cruise Motors (2×)               │
+│  └─→ High-Lift Motors (12×)           │
+└────────────────────────────────────────┘
+
+Pros: Extended range, GT runs at optimal RPM
+Cons: Conversion losses, complexity
+
+Option 3: PARALLEL HYBRID (Dual Path)
+┌────────────────────────────────────────┐
+│ Path 1: GT → Gearbox → Cruise Props   │
+│ Path 2: Battery → High-Lift Motors    │
+└────────────────────────────────────────┘
+
+Pros: GT direct drive efficiency for cruise
+Cons: Complex, heavy gearbox
+
+============================================================================
+SIZING METHODOLOGY
+============================================================================
+
+Step 1: Size Cruise Motors
+---------------------------
+P_cruise_required = D_cruise × V_cruise / η_prop
+where:
+  D_cruise = cruise drag (with small wing from blown lift)
+  V_cruise = cruise speed
+  η_prop = propeller efficiency
+
+P_cruise_per_motor = P_cruise_required / 2
+m_cruise_motor = P_cruise_per_motor / specific_power_motor
+
+Step 2: Size High-Lift Motors
+------------------------------
+Already specified: 12 motors × 10.5 kW = 126 kW total
+m_highlift_motors = 12 × 2.2 lb = 26.4 lb
+
+Step 3: Size Power Source
+--------------------------
+For Fully Electric:
+  E_mission = ∫(P_cruise + P_highlift(t)) dt
+  m_battery = E_mission / (specific_energy × DOD)
+
+For Serial Hybrid:
+  P_GT_cruise = P_cruise_required / (η_gen × η_motor)
+  P_GT_peak = (P_cruise + P_highlift) / (η_gen × η_motor)
+
+  Battery sized for:
+    - Transient peaks above GT power
+    - Takeoff/climb energy (high-lift motors)
+    - Emergency reserves
+
+Step 4: Account for Weight Cascade
+-----------------------------------
+Smaller wing (from blown lift) → less structure weight
+Less structure → less battery needed
+Lighter aircraft → even less battery
+Iterate until convergence
+
+============================================================================
+EXPECTED PERFORMANCE
+============================================================================
+
+Baseline (Conventional, Large Wing):
+  - TOGW: ~40,000 lb
+  - Wing: ~1,200 ft²
+  - Range: 400 nm
+
+With Dual Motor DEP:
+  - TOGW: ~22,000 lb (-45%)
+  - Wing: ~600 ft² (-50%)
+  - Range: 400 nm (same)
+  - Efficiency: +80-100% (PREE)
+
+============================================================================
+OPERATIONAL CONCEPT
+============================================================================
+
+TAKEOFF SEQUENCE:
+0:00 - Full power: Cruise motors + high-lift motors
+0:30 - Liftoff at reduced speed (blown wing)
+1:00 - Climb out, both motor sets active
+2:00 - Transition: Fold high-lift motors, continue climb on cruise motors
+
+CRUISE:
+- Only cruise motors active
+- High-lift motors folded, minimal drag
+- Optimal efficiency
+
+LANDING SEQUENCE:
+-5:00 - Begin descent
+-2:00 - Unfold high-lift motors
+-1:00 - Final approach, activate high-lift motors
+ 0:00 - Touchdown at reduced speed (blown wing)
+
+============================================================================
+NEXT STEPS FOR IMPLEMENTATION
+============================================================================
+
+1. Update config.json with cruise motor parameters
+2. Create DualMotorDEPPowertrain class
+3. Update mission simulation for motor switching
+4. Add folding drag model
+5. Implement power controller logic
+6. Add weight estimation for dual motor system
+7. Create comparison analysis tool
+
+See implementation files:
+  - config_dual_motor_dep.json
+  - dual_motor_powertrain.py
+  - analyze_dual_motor_dep.py
+
+============================================================================
+"""

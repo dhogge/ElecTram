@@ -1,0 +1,72 @@
+{
+  "dep_system": {
+    "enabled": true,
+    "architecture": "dual_motor",
+    "description": "Dual motor DEP: 12 high-lift inboard + 2 cruise outboard (X-57 style)",
+
+    "highlift_motors": {
+      "number_of_motors": 12,
+      "location": "inboard_wing",
+      "power_per_motor_kW": 10.5,
+      "propeller_diameter_ft": 1.9,
+      "weight_per_motor_lb": 2.2,
+      "specific_power_kW_kg": 5.0,
+      "efficiency": 0.95,
+      "blown_span_fraction": 0.65,
+      "lift_augmentation_factor_max": 1.80,
+      "use_for_wing_sizing": true,
+      "active_phases": ["takeoff", "climb", "landing"],
+      "folding": {
+        "can_fold": true,
+        "folded_drag_coefficient_increment": 0.001,
+        "fold_time_seconds": 10
+      }
+    },
+
+    "cruise_motors": {
+      "number_of_motors": 2,
+      "location": "wingtip",
+      "sizing_method": "from_cruise_requirement",
+      "propeller_diameter_ft": 7.5,
+      "weight_per_motor_lb": "calculated",
+      "specific_power_kW_kg": 5.0,
+      "efficiency": 0.95,
+      "propeller_efficiency": 0.85,
+      "active_phases": ["all"],
+      "wingtip_benefits": {
+        "induced_drag_reduction": 0.05,
+        "description": "Wingtip propellers recover vortex energy"
+      }
+    },
+
+    "power_architecture": {
+      "type": "fully_electric",
+      "options": ["fully_electric", "serial_hybrid", "parallel_hybrid"],
+      "description": {
+        "fully_electric": "Battery → Both motor sets",
+        "serial_hybrid": "GT → Gen → Battery → Both motor sets",
+        "parallel_hybrid": "GT → Cruise only, Battery → High-lift only"
+      }
+    },
+
+    "wiring_and_controls": {
+      "wiring_weight_factor": 0.15,
+      "controller_weight_per_kW": 0.1,
+      "cooling_weight_factor": 0.05
+    }
+  },
+
+  "battery_sizing_notes": {
+    "description": "For dual motor DEP, battery must provide:",
+    "energy_requirements": [
+      "Cruise: P_cruise × t_cruise",
+      "High-lift: 126 kW × (t_takeoff + t_climb + t_landing)",
+      "Reserves: 30 min at cruise power"
+    ],
+    "typical_breakdown": {
+      "cruise_energy_Wh": "80-90% of total",
+      "highlift_energy_Wh": "5-10% of total",
+      "reserves_energy_Wh": "5-10% of total"
+    }
+  }
+}
