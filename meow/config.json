@@ -65,9 +65,13 @@
       "specific_power_kW_kg": 5.0,
       "efficiency": 0.95,
       "blown_span_fraction": 0.65,
-      "lift_augmentation_factor_max": 1.80,
+      "lift_augmentation_factor_max": 1.8,
       "use_for_wing_sizing": true,
-      "active_phases": ["takeoff", "climb", "landing"],
+      "active_phases": [
+        "takeoff",
+        "climb",
+        "landing"
+      ],
       "folding": {
         "can_fold": true,
         "folded_drag_coefficient_increment": 0.001,
@@ -83,7 +87,9 @@
       "specific_power_kW_kg": 5.0,
       "efficiency": 0.95,
       "propeller_efficiency": 0.85,
-      "active_phases": ["all"],
+      "active_phases": [
+        "all"
+      ],
       "wingtip_benefits": {
         "induced_drag_reduction": 0.05,
         "description": "Wingtip propellers recover vortex energy"
@@ -91,11 +97,15 @@
     },
     "power_architecture": {
       "type": "fully_electric",
-      "options": ["fully_electric", "serial_hybrid", "parallel_hybrid"],
+      "options": [
+        "fully_electric",
+        "serial_hybrid",
+        "parallel_hybrid"
+      ],
       "description": {
-        "fully_electric": "Battery → Both motor sets",
-        "serial_hybrid": "GT → Gen → Battery → Both motor sets",
-        "parallel_hybrid": "GT → Cruise only, Battery → High-lift only"
+        "fully_electric": "Battery \u2192 Both motor sets",
+        "serial_hybrid": "GT \u2192 Gen \u2192 Battery \u2192 Both motor sets",
+        "parallel_hybrid": "GT \u2192 Cruise only, Battery \u2192 High-lift only"
       }
     },
     "wiring_and_controls": {
