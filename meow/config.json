@@ -53,7 +53,7 @@
     "wiring_weight_factor": 0.15,
     "wing_structure_factor": 1.0,
     "lift_augmentation_factor_max": 1.8,
-    "use_for_wing_sizing": false,
+    "use_for_wing_sizing": true,
     "wing_sizing_description": "When true, wing area is sized assuming blown lift is available for takeoff/landing, resulting in smaller cruise-optimized wing"
   },
   "mission_requirements": {
