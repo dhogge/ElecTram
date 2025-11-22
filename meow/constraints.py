@@ -17,24 +17,40 @@ def perform_constraint_analysis(
     cruise_alt_ft: float,
     prop_efficiency: float,
     config,
+    blown_lift_augmentation: float = 1.0,
+    use_blown_lift_sizing: bool = False,
 ) -> Tuple[float, float]:
     """
-    Standalone constraint analysis.
+    Standalone constraint analysis with optional blown lift wing sizing.
+
+    Args:
+        blown_lift_augmentation: Lift augmentation factor from blown lift (1.0 = no augmentation)
+        use_blown_lift_sizing: If True, apply blown lift augmentation to CLmax for wing sizing
+                               This enables smaller wing area optimized for cruise
 
     Returns:
         WS_design (lb/ft²), P_shaft_kW (total for all engines).
     """
+    # Apply blown lift augmentation to CLmax values if enabled
+    if use_blown_lift_sizing:
+        CLmax_clean_eff = CLmax_clean * blown_lift_augmentation
+        CLmax_TO_eff = CLmax_TO * blown_lift_augmentation
+        CLmax_land_eff = CLmax_land * blown_lift_augmentation
+    else:
+        CLmax_clean_eff = CLmax_clean
+        CLmax_TO_eff = CLmax_TO
+        CLmax_land_eff = CLmax_land
     rho_SL = 0.002377  # slug/ft³ at sea level
     V_stall_fps = V_stall_kts * 1.688
     N_engines = config.get('propulsion', 'number_of_engines')
 
     # 1. Stall speed constraint
-    WS_stall_max = 0.5 * rho_SL * V_stall_fps**2 * CLmax_clean
+    WS_stall_max = 0.5 * rho_SL * V_stall_fps**2 * CLmax_clean_eff
 
     # 2. Landing constraint
     W_land_ratio = 0.95
     sigma_SL = 1.0
-    WS_landing_max = (LFL_ft - 600) * sigma_SL * CLmax_land / 80
+    WS_landing_max = (LFL_ft - 600) * sigma_SL * CLmax_land_eff / 80
     WS_landing_max_TO = WS_landing_max / W_land_ratio
 
     # 3. Takeoff constraint
@@ -42,16 +58,16 @@ def perform_constraint_analysis(
 
     # 4. Climb constraints
     ks_climb = 1.2
-    CL_climb = CLmax_clean / ks_climb**2
+    CL_climb = CLmax_clean_eff / ks_climb**2
     CD_climb = CD0 + K1 * CL_climb**2
 
     gamma_climb_OEI = 0.024
-    T_W_climb_OEI_req = (ks_climb**2 / CLmax_clean) * CD_climb + gamma_climb_OEI
+    T_W_climb_OEI_req = (ks_climb**2 / CLmax_clean_eff) * CD_climb + gamma_climb_OEI
     OEI_factor = N_engines / (N_engines - 1)
     TW_climb_OEI = OEI_factor * T_W_climb_OEI_req
 
     gamma_climb_AEO = 0.05
-    T_W_climb_AEO_req = (ks_climb**2 / CLmax_clean) * CD_climb + gamma_climb_AEO
+    T_W_climb_AEO_req = (ks_climb**2 / CLmax_clean_eff) * CD_climb + gamma_climb_AEO
     TW_climb_AEO = T_W_climb_AEO_req
 
     # 5. Service ceiling constraint
@@ -63,7 +79,7 @@ def perform_constraint_analysis(
     rho_ceiling_slug = rho_ceiling_kg_m3 / 515.379
 
     alpha_ceiling = 0.50
-    V_climb_ceiling = np.sqrt(2 * 60 / (rho_ceiling_slug * CLmax_clean))
+    V_climb_ceiling = np.sqrt(2 * 60 / (rho_ceiling_slug * CLmax_clean_eff))
     T_W_ceiling_req = ROC_ceiling_fps / V_climb_ceiling + 2 * np.sqrt(CD0 * K1)
     TW_ceiling = (1.0 / alpha_ceiling) * T_W_ceiling_req
 
@@ -80,7 +96,7 @@ def perform_constraint_analysis(
     # Design WS from stall and landing
     WS_design = min(WS_stall_max, WS_landing_max_TO)
 
-    TW_takeoff = WS_design / (sigma_SL * CLmax_TO * TOP)
+    TW_takeoff = WS_design / (sigma_SL * CLmax_TO_eff * TOP)
 
     CL_cruise = TOGW_lb / (q_cruise * (TOGW_lb / WS_design))
     CD_cruise = CD0 + K1 * CL_cruise**2
@@ -118,7 +134,15 @@ def perform_constraint_analysis(
     # Console output kept here so behavior matches original
     print(f"\n{'='*70}")
     print(f"CONSTRAINT ANALYSIS RESULTS")
+    if use_blown_lift_sizing:
+        print(f"  (Using Blown Lift Wing Sizing - Augmentation: {blown_lift_augmentation:.3f}x)")
     print(f"{'='*70}")
+    if use_blown_lift_sizing:
+        print(f"Effective CLmax (with blown lift):")
+        print(f"  CLmax_clean:   {CLmax_clean:.2f} → {CLmax_clean_eff:.2f}")
+        print(f"  CLmax_takeoff: {CLmax_TO:.2f} → {CLmax_TO_eff:.2f}")
+        print(f"  CLmax_landing: {CLmax_land:.2f} → {CLmax_land_eff:.2f}")
+        print(f"")
     print(f"Wing Loading Limits:")
     print(f"  Stall speed (V_stall = {V_stall_kts} kts):  {WS_stall_max:6.1f} lb/ft²")
     print(f"  Landing (LFL = {LFL_ft} ft):       {WS_landing_max_TO:6.1f} lb/ft²")

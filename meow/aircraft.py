@@ -40,6 +40,7 @@ class HybridElectricAircraft:
         self.dep_lift_aug_max = config.get('dep_system', 'lift_augmentation_factor_max')
         self.dep_blown_span_fraction = config.get('dep_system', 'blown_span_fraction')
         self.dep_num_motors = config.get('dep_system', 'number_of_highlift_motors')
+        self.dep_use_for_wing_sizing = config.get('dep_system', 'use_for_wing_sizing')
         # ===== PERFORMANCE =====
         self.V_stall_kts = config.get('performance_requirements', 'stall_speed_requirement_kts')
         self.BFL_ft = config.get('performance_requirements', 'balanced_field_length_ft')
@@ -150,6 +151,13 @@ class HybridElectricAircraft:
         return simulate_mission(self, segments, TOGW_lb, S_wing_ft2)
 
     def constraint_analysis(self, TOGW_lb: float) -> Tuple[float, float]:
+        # Calculate blown lift augmentation factor if wing sizing uses it
+        blown_lift_aug = 1.0
+        use_blown_sizing = False
+        if self.dep_enabled and self.dep_use_for_wing_sizing:
+            blown_lift_aug = self.get_lift_augmentation_factor(blown_lift_active=True)
+            use_blown_sizing = True
+
         return perform_constraint_analysis(
             TOGW_lb=TOGW_lb,
             V_stall_kts=self.V_stall_kts,
@@ -164,6 +172,8 @@ class HybridElectricAircraft:
             cruise_alt_ft=self.cruise_alt_ft,
             prop_efficiency=self.tech.prop_efficiency,
             config=config,
+            blown_lift_augmentation=blown_lift_aug,
+            use_blown_lift_sizing=use_blown_sizing,
         )
 
     def calculate_OEW(self, TOGW_lb: float, S_wing_ft2: float) -> float:
